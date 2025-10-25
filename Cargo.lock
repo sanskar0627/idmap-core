@@ -100,6 +100,7 @@ dependencies = [
  "rand_core",
  "round-based",
  "serde",
+ "serde_json",
  "sha2",
  "tokio",
 ]
@@ -847,6 +848,7 @@ dependencies = [
  "rand_core",
  "round-based",
  "serde",
+ "serde_json",
  "sha2",
  "tokio",
 ]
