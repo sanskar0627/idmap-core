@@ -7,7 +7,7 @@ edition = "2024"
 dkg_tcp = { path = ".." }
 futures = "0.3"
 tokio = { version = "1.33", features = ["full"] }
-givre = { version = "0.2.0", features = ["cggmp21-keygen", "ciphersuite-ed25519"] }
+givre = { version = "0.2.0", features = ["cggmp21-keygen", "ciphersuite-ed25519", "full-signing", "serde"] }
 anyhow = "1.0.100"
 round-based = "0.4.1"
 sha2 = "0.10.9"

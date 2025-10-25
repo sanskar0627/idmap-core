@@ -1,14 +1,12 @@
-use anyhow::Result;
+// full valid code of server [running]
+/*
+    use anyhow::Result;
 use dkg_tcp::{TcpIncoming, TcpOutgoing};
 use givre::ciphersuite::AdditionalEntropy; // for private share to_bytes
+use givre::generic_ec::{SecretScalar, EncodedScalar, NonZero};
 use givre::generic_ec::curves::Ed25519;
-use givre::generic_ec::{EncodedScalar, NonZero, SecretScalar};
-use givre::key_share::DirtyKeyShare;
-use givre::keygen::key_share::Valid;
 use givre::keygen::security_level::SecurityLevel128;
 use givre::keygen::{ExecutionId, ThresholdMsg, keygen};
-use givre::signing;
-use givre::signing::{full_signing::Msg, aggregate::aggregate};
 use rand_core::OsRng;
 use round_based::MpcParty;
 use sha2::Sha256;
@@ -16,8 +14,7 @@ use tokio::net::TcpListener;
 
 use hex;
 
-type KeygenMsg = ThresholdMsg<Ed25519, SecurityLevel128, Sha256>;
-type SigningMsg = Msg<Ed25519>;
+type Msg = ThresholdMsg<Ed25519, SecurityLevel128, Sha256>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -28,33 +25,26 @@ async fn main() -> Result<()> {
     let (socket, addr) = listener.accept().await?;
     println!("[SERVER] Client connected from {:?}", addr);
 
-    // Convert to std
+    // Convert to std and clone
     let std_stream = socket.into_std()?;
     std_stream.set_nonblocking(true)?;
+    let std_stream_clone = std_stream.try_clone()?;
 
-    // Clone for DKG and signing phases
-    let std_stream_dkg = std_stream.try_clone()?;
-    let std_stream_sign = std_stream.try_clone()?;
+    // Convert back to tokio
+    let reader_stream = tokio::net::TcpStream::from_std(std_stream_clone)?;
+    let writer_stream = tokio::net::TcpStream::from_std(std_stream)?;
 
-    // Convert clones to tokio streams
-    let reader_stream_dkg = tokio::net::TcpStream::from_std(std_stream_dkg.try_clone()?)?;
-    let writer_stream_dkg = tokio::net::TcpStream::from_std(std_stream_dkg)?;
+    // Create transports
+    let incoming = TcpIncoming::<Msg>::new(reader_stream, id);
+    let outgoing = TcpOutgoing::<Msg>::new(writer_stream, id);
 
-    let reader_stream_sign = tokio::net::TcpStream::from_std(std_stream_sign.try_clone()?)?;
-    let writer_stream_sign = tokio::net::TcpStream::from_std(std_stream_sign)?;
-
-    // ================= DKG PHASE =================
-    let incoming = TcpIncoming::<KeygenMsg>::new(reader_stream_dkg, id);
-    let outgoing = TcpOutgoing::<KeygenMsg>::new(writer_stream_dkg, id);
-
+    // Setup DKG
     let eid = ExecutionId::new(b"session-001");
     let builder = keygen::<Ed25519>(eid, id as u16, 2).set_threshold(2);
     let mut rng = OsRng;
 
     let party = MpcParty::connected((incoming, outgoing));
-    println!("starting DKG for server");
-
-    let valid_shares: Valid<DirtyKeyShare<Ed25519>>;
+    println!("starting dkg for server");
 
     match builder.start(&mut rng, party).await {
         Ok(valid_share) => {
@@ -77,12 +67,12 @@ async fn main() -> Result<()> {
                 );
             }
 
-            // Private shares
+            // private shares
             let private_share = &valid_share.x;
             let encoded: EncodedScalar<Ed25519> =
-                <NonZero<SecretScalar<Ed25519>> as AdditionalEntropy<
-                    givre::ciphersuite::Ed25519,
-                >>::to_bytes(private_share);
+                <NonZero<SecretScalar<Ed25519>> as AdditionalEntropy<givre::ciphersuite::Ed25519>>::to_bytes(
+                    private_share,
+                );
             let private_bytes: [u8; 32] = encoded
                 .as_ref()
                 .try_into()
@@ -93,8 +83,6 @@ async fn main() -> Result<()> {
                 println!("Threshold (min signers): {}", vss.min_signers);
                 println!("Party Indexes: {:?}", vss.I);
             }
-
-            valid_shares = valid_share;
         }
         Err(e) => {
             eprintln!("DKG failed with error: {:#?}", e);
@@ -102,35 +90,9 @@ async fn main() -> Result<()> {
         }
     }
 
-    println!(
-        "shared public key (hex): {}",
-        hex::encode(valid_shares.shared_public_key().to_bytes(true))
-    );
-    println!("finished DKG for server");
-
-    // ================= SIGNING PHASE =================
-    let incoming = TcpIncoming::<SigningMsg>::new(reader_stream_sign, id);
-    let outgoing = TcpOutgoing::<SigningMsg>::new(writer_stream_sign, id);
-    let party = MpcParty::connected((incoming, outgoing));
-
-    let i = id as u16; // signer index
-    let parties_indexes_at_keygen: [u16; 2] = [0, 1];
-    let key_share = valid_shares;
-    let data_to_sign = b"transaction payload";
-
-    let _signature = signing::<givre::ciphersuite::Ed25519>(
-        i,
-        &key_share,
-        &parties_indexes_at_keygen,
-        data_to_sign,
-    )
-    .sign(&mut rng, party)
-    .await?;
-
-    println!("partial signature created successfully");
-    println!("r: {}", hex::encode(_signature.r.to_bytes()));
-    
-    
-    
+    println!("finished dkg for server");
     Ok(())
 }
+
+
+*/
