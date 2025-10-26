@@ -1,10 +1,6 @@
+use crate::{TcpIncoming, TcpOutgoing};
+
 use anyhow::Result;
-use dkg_tcp::{TcpIncoming, TcpOutgoing};
-use givre::ciphersuite::{AdditionalEntropy};
-use givre::generic_ec::{EncodedScalar, NonZero, SecretScalar, curves::Ed25519};
-use givre::key_share::DirtyKeyShare;
-use givre::keygen::{ExecutionId, ThresholdMsg, keygen};
-use givre::keygen::{key_share::Valid, security_level::SecurityLevel128};
 use hex;
 use rand_core::OsRng;
 use round_based::MpcParty;
@@ -12,12 +8,22 @@ use sha2::Sha256;
 use std::convert::TryInto;
 use tokio::net::TcpStream;
 
+use givre::ciphersuite::AdditionalEntropy;
+use givre::generic_ec::{EncodedScalar, NonZero, SecretScalar, curves::Ed25519};
+use givre::key_share::DirtyKeyShare;
+use givre::keygen::{ExecutionId, ThresholdMsg, keygen};
+use givre::keygen::{key_share::Valid, security_level::SecurityLevel128};
+
+use solana_pubkey::Pubkey;
+use solana_rpc_client::rpc_client::RpcClient;
+
 type KeygenMsg = ThresholdMsg<Ed25519, SecurityLevel128, Sha256>;
 
 /// Runs the DKG protocol for this participant and returns the generated private share.
 pub async fn generate_private_share(
     std_stream_dkg: std::net::TcpStream,
     id: u64,
+    session: &'static [u8],
 ) -> Result<Valid<DirtyKeyShare<Ed25519>>> {
     // Convert std streams to tokio streams
     let reader_stream_dkg = TcpStream::from_std(std_stream_dkg.try_clone()?)?;
@@ -27,7 +33,7 @@ pub async fn generate_private_share(
     let outgoing = TcpOutgoing::<KeygenMsg>::new(writer_stream_dkg, id);
 
     // Initialize builder for 2-of-2 threshold (adjust as needed)
-    let eid = ExecutionId::new(b"session-001");
+    let eid = ExecutionId::new(session); // get this from the caller
     let builder = keygen::<Ed25519>(eid, id as u16, 2).set_threshold(2);
     let mut rng = OsRng;
 
@@ -46,10 +52,9 @@ pub async fn generate_private_share(
     );
 
     let private_share = &valid_share.x;
-    let encoded: EncodedScalar<Ed25519> =
-        <NonZero<SecretScalar<Ed25519>> as AdditionalEntropy<
-            givre::ciphersuite::Ed25519,
-        >>::to_bytes(private_share);
+    let encoded: EncodedScalar<Ed25519> = <NonZero<SecretScalar<Ed25519>> as AdditionalEntropy<
+        givre::ciphersuite::Ed25519,
+    >>::to_bytes(private_share);
     let private_bytes: [u8; 32] = encoded.as_ref().try_into().unwrap();
     println!("[DKG] Private Share (hex): {}", hex::encode(private_bytes));
 
@@ -60,3 +65,32 @@ pub async fn generate_private_share(
 
     Ok(valid_share)
 }
+
+/// 🚀 Helper: Airdrops `lamports` to the given Solana address (Devnet)
+pub fn airdrop_funds(address: &str, lamports: u64) -> Result<Pubkey> {
+    let rpc = RpcClient::new("https://api.devnet.solana.com".to_string());
+    let pubkey = Pubkey::from_str_const(address);
+
+    println!(
+        "[AIRDROP] Requesting airdrop of {} lamports to {}",
+        lamports, address
+    );
+    let sig = rpc.request_airdrop(&pubkey, lamports)?;
+    println!("[AIRDROP] Transaction signature: {}", sig);
+
+    // Wait for confirmation
+    rpc.confirm_transaction(&sig)?;
+    println!("[AIRDROP] Airdrop confirmed ✅");
+
+    // Check balance
+    let balance = rpc.get_balance(&pubkey)?;
+    println!("[BALANCE] {} now has {} lamports", address, balance);
+
+    if balance < lamports {
+        println!("[WARNING] Balance is less than requested airdrop, waiting a bit...");
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+
+    Ok(pubkey)
+}
+

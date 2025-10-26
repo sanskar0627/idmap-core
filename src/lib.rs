@@ -1,4 +1,3 @@
-// lib.rs (replacement)
 use bincode;
 use bytes::Bytes;
 use futures::{Sink, SinkExt, Stream};
@@ -13,6 +12,9 @@ use std::{
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+pub mod keygen;
+pub mod sign;
 
 #[derive(Serialize, Deserialize, Debug)]
 enum MsgKind {
