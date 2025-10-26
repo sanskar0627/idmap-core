@@ -16,3 +16,19 @@ serde = { version = "1.0", features = ["derive"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 hex = "0.4.3"
 serde_json = "1.0.145"
+bs58 = "0.5.1"
+
+solana-sdk = "3.0.0"
+solana-program = "3.0.0"
+borsh = "1.5.7"
+solana-instruction = "3.0.0"
+solana-keypair = "3.0.1"
+solana-message = "3.0.1"
+solana-pubkey = "3.0.0"
+solana-rpc-client = "3.0.8"
+solana-signer = "3.0.0"
+solana-transaction = "3.0.1"
+solana-system-program = "3.0.8"
+#kafka = "0.10.0"
+#openssl = { version = "0.10", features = ["vendored"] }
+

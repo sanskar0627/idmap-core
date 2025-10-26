@@ -1,42 +1,47 @@
-use std::convert::TryInto;
-use tokio::net::TcpStream;
+mod keygen;
+mod sign;
 
 use anyhow::Result;
+use futures::SinkExt;
+use std::convert::TryInto;
+use std::fmt::Debug;
+use tokio::net::{TcpListener, TcpStream};
+
 use dkg_tcp::{TcpIncoming, TcpOutgoing};
-use futures::StreamExt;
-use givre::ciphersuite::AdditionalEntropy; // for private share to_bytes
-use givre::ciphersuite::NormalizedPoint;
-use givre::generic_ec::Point;
-use givre::generic_ec::Scalar;
-use givre::generic_ec::curves::Ed25519;
-use givre::generic_ec::{EncodedScalar, NonZero, SecretScalar};
+use givre::ciphersuite::{AdditionalEntropy, Ciphersuite, Ed25519 as CsEd25519};
+use givre::generic_ec::{EncodedScalar, NonZero, Scalar, SecretScalar, curves::Ed25519};
 use givre::key_share::DirtyKeyShare;
-use givre::keygen::key_share::Valid;
-use givre::keygen::security_level::SecurityLevel128;
 use givre::keygen::{ExecutionId, ThresholdMsg, keygen};
+use givre::keygen::{key_share::Valid, security_level::SecurityLevel128};
 use givre::signing;
-use givre::signing::{aggregate::aggregate, full_signing::Msg};
-use rand_core::OsRng;
-use round_based::MpcParty;
-use serde::{Deserialize, Serialize};
-use sha2::Sha256;
-use tokio::net::TcpListener;
+use givre::signing::{aggregate::Signature, full_signing::Msg};
+use round_based::{MpcParty, Outgoing};
 
 use hex;
+use rand_core::OsRng;
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+
+use solana_instruction::Instruction;
+use solana_message::Message;
+use solana_program::instruction::AccountMeta;
+use solana_pubkey::Pubkey;
+use solana_rpc_client::rpc_client::RpcClient;
+use solana_sdk::signature::Signature as SolSignature;
+use solana_transaction::Transaction;
 
 type KeygenMsg = ThresholdMsg<Ed25519, SecurityLevel128, Sha256>;
 type SigningMsg = Msg<Ed25519>;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SignatureMsg {
-    pub signer_index: u16,
-    pub r: Vec<u8>,
-    pub z: Vec<u8>,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MessageToSign {
+    pub data: Vec<u8>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let id: u64 = 0;
+
     let listener = TcpListener::bind("0.0.0.0:7000").await?;
     println!("[SERVER] Listening on 0.0.0.0:7000");
 
@@ -48,31 +53,30 @@ async fn main() -> Result<()> {
     std_stream.set_nonblocking(true)?;
 
     // Clone for DKG and signing phases
-    let std_stream_dkg = std_stream.try_clone()?;
+    let std_stream_dkg: std::net::TcpStream = std_stream.try_clone()?;
     let std_stream_sign = std_stream.try_clone()?;
-    let std_stream_receive = std_stream.try_clone()?;
+    let std_stream_send = std_stream.try_clone()?;
 
     // Convert clones to tokio streams
-    let reader_stream_dkg = tokio::net::TcpStream::from_std(std_stream_dkg.try_clone()?)?;
-    let writer_stream_dkg = tokio::net::TcpStream::from_std(std_stream_dkg)?;
-
-    let reader_stream_sign = tokio::net::TcpStream::from_std(std_stream_sign.try_clone()?)?;
-    let writer_stream_sign = tokio::net::TcpStream::from_std(std_stream_sign)?;
-
-    let reader_stream_receiver = TcpStream::from_std(std_stream_receive)?;
+    let reader_stream_dkg: TcpStream = TcpStream::from_std(std_stream_dkg.try_clone()?)?;
+    let writer_stream_dkg = TcpStream::from_std(std_stream_dkg)?;
+    let reader_stream_sign = TcpStream::from_std(std_stream_sign.try_clone()?)?;
+    let writer_stream_sign = TcpStream::from_std(std_stream_sign)?;
+    let writer_stream_send = TcpStream::from_std(std_stream_send)?;
 
     // ================= DKG PHASE =================
     let incoming = TcpIncoming::<KeygenMsg>::new(reader_stream_dkg, id);
     let outgoing = TcpOutgoing::<KeygenMsg>::new(writer_stream_dkg, id);
+    let mut outgoing_send = TcpOutgoing::<MessageToSign>::new(writer_stream_send, id);
 
-    let eid = ExecutionId::new(b"session-001");
+    let eid = ExecutionId::new(b"session-001"); // need to be synamic for each session
     let builder = keygen::<Ed25519>(eid, id as u16, 2).set_threshold(2);
     let mut rng = OsRng;
 
     let party = MpcParty::connected((incoming, outgoing));
     println!("starting DKG for server");
 
-    let valid_shares: Valid<DirtyKeyShare<Ed25519>>;
+    let valid_shares = keygen::generate_private_share(std_stream_dkg, id).await?;
 
     match builder.start(&mut rng, party).await {
         Ok(valid_share) => {
@@ -86,7 +90,9 @@ async fn main() -> Result<()> {
 
             let party_index = valid_share.i;
             println!("Party Index: {}", party_index);
+
             let public_shares = &valid_share.public_shares;
+
             for (idx, pk) in public_shares.iter().enumerate() {
                 println!(
                     "Public Share {} (hex): {}",
@@ -120,6 +126,10 @@ async fn main() -> Result<()> {
         }
     }
 
+    let pubkey_bytes = valid_shares.shared_public_key().to_bytes(true);
+    let solana_address = bs58::encode(pubkey_bytes).into_string();
+    println!("SOLANA ADDRESS: {}", solana_address);
+
     println!(
         "shared public key (hex): {}",
         hex::encode(valid_shares.shared_public_key().to_bytes(true))
@@ -133,65 +143,82 @@ async fn main() -> Result<()> {
 
     let i = id as u16; // signer index
     let parties_indexes_at_keygen: [u16; 2] = [0, 1];
-    let key_share = valid_shares;
-    let data_to_sign = b"transaction payload";
+    let key_share: Valid<DirtyKeyShare<Ed25519>> = valid_shares;
 
-    let _signature = signing::<givre::ciphersuite::Ed25519>(
-        i,
-        &key_share,
-        &parties_indexes_at_keygen,
-        data_to_sign,
-    )
-    .sign(&mut rng, party)
-    .await?;
+    // message to sign
+    println!("creating message to sign");
+    let _rpc = RpcClient::new("https://api.devnet.solana.com".to_string());
+    let from = Pubkey::from_str_const(&solana_address);
+    let to = Pubkey::from_str_const("3fHQhTVCHerqk69GwqXhWbG4zRArCUqi6Bhnu7pTm5mj");
+    let lamports: u64 = 1_000_000;
+    const SYSTEM_PROGRAM_ID: &str = "11111111111111111111111111111111";
 
-    println!("partial signature created successfully! [server]");
+    // airdrop
+    let sig = _rpc.request_airdrop(&from, 500_000_00)?; // 0.5 SOL = 500_000_000 lamports
+    println!("Airdrop transaction signature: {}", sig);
+
+    _rpc.confirm_transaction(&sig)?;
+    println!("Airdrop confirmed! Balance ready for use.");
+
+    // 8 bytes: first 4 = transfer discriminator, next 8 = lamports
+    // The transfer discriminator for system program = 2
+    let mut data = vec![];
+    data.extend_from_slice(&2u32.to_le_bytes()); // "transfer" enum variant index
+    data.extend_from_slice(&lamports.to_le_bytes()); // amount
+
+    let instruction = Instruction {
+        program_id: Pubkey::from_str_const(SYSTEM_PROGRAM_ID),
+        accounts: vec![AccountMeta::new(from, true), AccountMeta::new(to, false)],
+        data,
+    };
+
+    // send message to the other server to sign the same message
+    let mut message: Message = Message::new(&[instruction], Some(&from));
+    message.recent_blockhash = _rpc.get_latest_blockhash()?;
+    let message_data: Vec<u8> = message.serialize();
+
+    let signing_msg: MessageToSign = MessageToSign {
+        data: message_data.clone(),
+    };
+    let outgoing_msg: Outgoing<MessageToSign> = Outgoing::p2p(1, signing_msg.clone());
+
+    // send message_data to the other server
+    outgoing_send.send(outgoing_msg).await?;
+
+    let _signature: Signature<CsEd25519> =
+        signing::<CsEd25519>(i, &key_share, &parties_indexes_at_keygen, &message_data)
+            .sign(&mut rng, party) // sign gives the full signature, and uses aggregate internally
+            .await?;
+
+    println!("signature created successfully! [server]");
     println!("r: {}", hex::encode(_signature.r.to_bytes()));
-    let z_bytes_generic: <givre::ciphersuite::Ed25519 as givre::ciphersuite::Ciphersuite>::ScalarBytes =
-        <Scalar<Ed25519> as AdditionalEntropy<givre::ciphersuite::Ed25519>>::to_bytes(&_signature.z);
+    let z_bytes_generic: <CsEd25519 as Ciphersuite>::ScalarBytes =
+        <Scalar<Ed25519> as AdditionalEntropy<CsEd25519>>::to_bytes(&_signature.z);
 
     let z_bytes: [u8; 32] = z_bytes_generic
         .as_ref()
         .try_into()
         .expect("must be 32 bytes");
+
+    let r_bytes_sig = _signature.r.to_bytes();
+    let r_slice = r_bytes_sig.as_ref();
+    let z_bytes_sig = z_bytes.clone();
+    let z_slice: &[u8] = &z_bytes_sig;
     println!("z: {}", hex::encode(z_bytes));
 
-    // ================= RECEIVE CLIENT PARTIAL SIGNATURE =================
-    let mut incoming_sig = TcpIncoming::<SignatureMsg>::new(reader_stream_receiver, id);
+    // ================= BROADCAST TO THE SOLANA BLOCKCHAIN =================
 
-    // Await the next incoming message
-    // Await the next incoming message
-    if let Some(Ok(incoming_msg)) = incoming_sig.next().await {
-        let sig_msg: SignatureMsg = incoming_msg.msg;
-        println!("[SERVER] Received signature from client: {:?}", sig_msg);
+    let mut tx = Transaction::new_unsigned(message);
+    let sig_bytes = [r_slice, z_slice].concat();
+    let sol_sig = SolSignature::try_from(sig_bytes.clone())
+        .expect("err creating solana signature from dkg signature");
 
-        // Convert r bytes into Point
-        let r_point = Point::<Ed25519>::from_bytes(&sig_msg.r)
-            .map_err(|e| anyhow::anyhow!("Invalid r point: {:?}", e))?;
+    println!("txn created");
+    tx.signatures = vec![sol_sig];
+    println!("sig added to sig");
 
-        // Normalize the point (returns Result<NormalizedPoint, _>)
-        let r_normalized =
-            NormalizedPoint::<givre::ciphersuite::Ed25519, _>::try_normalize(r_point)
-                .map_err(|_| anyhow::anyhow!("r point is not normalized"))?;
-
-        // TODO: resolve the error: [InvalidScalar] for 'z', runtime error
-        // Ensure exactly 32 bytes
-        let z_bytes: [u8; 32] = sig_msg.z.as_slice().try_into().expect("z must be 32 bytes");
-
-        // Convert back into Scalar<Ed25519>
-        let z_scalar = Scalar::<Ed25519>::from_be_bytes(&z_bytes)
-            .map_err(|e| anyhow::anyhow!("Invalid z scalar: {:?}", e))?;
-
-        // Construct a partial signature
-        let client_partial_sig =
-            givre::signing::aggregate::Signature::<givre::ciphersuite::Ed25519> {
-                r: r_normalized,
-                z: z_scalar,
-            };
-
-        // Now you can aggregate it with your own partial signature
-        println!("[SERVER] Constructed client partial signature successfully");
-    }
+    let tx_sig = _rpc.send_transaction(&tx)?;
+    println!("Broadcasted tx: {}", tx_sig);
 
     Ok(())
 }
