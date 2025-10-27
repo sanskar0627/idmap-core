@@ -68,29 +68,78 @@ pub async fn generate_private_share(
 
 /// 🚀 Helper: Airdrops `lamports` to the given Solana address (Devnet)
 pub fn airdrop_funds(address: &str, lamports: u64) -> Result<Pubkey> {
-    let rpc = RpcClient::new("https://api.devnet.solana.com".to_string());
-    let pubkey = Pubkey::from_str_const(address);
+    let rpc_endpoints = [
+        "https://api.devnet.solana.com",
+        "https://rpc.ankr.com/solana_devnet",
+        "https://devnet.rpcpool.com",
+        "https://rpc-devnet.helius.xyz",
+        "https://devnet-rpc.triton.one",
+    ];
 
+    let pubkey = Pubkey::from_str_const(address);
     println!(
-        "[AIRDROP] Requesting airdrop of {} lamports to {}",
+        "\n [AIRDROP] Requesting {} lamports for {}\n",
         lamports, address
     );
-    let sig = rpc.request_airdrop(&pubkey, lamports)?;
-    println!("[AIRDROP] Transaction signature: {}", sig);
 
-    // Wait for confirmation
-    rpc.confirm_transaction(&sig)?;
-    println!("[AIRDROP] Airdrop confirmed ✅");
+    let mut success = false;
 
-    // Check balance
-    let balance = rpc.get_balance(&pubkey)?;
-    println!("[BALANCE] {} now has {} lamports", address, balance);
+    // Try multiple RPC endpoints
+    for url in rpc_endpoints.iter() {
+        let rpc = RpcClient::new(url.to_string());
+        println!("[INFO] Trying RPC: {}", url);
 
-    if balance < lamports {
-        println!("[WARNING] Balance is less than requested airdrop, waiting a bit...");
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        for attempt in 1..=3 {
+            println!("[TRY] Attempt {} via {}", attempt, url);
+
+            match rpc.request_airdrop(&pubkey, lamports) {
+                Ok(sig) => {
+                    println!("[AIRDROP] Tx signature: {}", sig);
+                    // Try to confirm
+                    match rpc.confirm_transaction(&sig) {
+                        Ok(confirmed) if confirmed => {
+                            println!("🎉 [SUCCESS] Airdrop confirmed via {}\n", url);
+                            success = true;
+                            break;
+                        }
+                        Ok(_) | Err(_) => {
+                            println!("[WARN] Confirmation failed. Retrying...");
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("[ERROR] Airdrop failed via {}: {:?}", url, e);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
+            }
+        }
+
+        if success {
+            break;
+        }
+    }
+
+    // Check final balance
+    let rpc = RpcClient::new("https://api.devnet.solana.com".to_string());
+    match rpc.get_balance(&pubkey) {
+        Ok(balance) => {
+            println!(
+                "[BALANCE] {} has {} lamports ({} SOL)\n",
+                address,
+                balance,
+                balance as f64 / 1_000_000_000.0
+            );
+            if balance < lamports {
+                println!("[WARN] Balance lower than requested airdrop ⚠️");
+            }
+        }
+        Err(e) => println!("[WARN] Could not fetch balance: {:?}", e),
+    }
+
+    if !success {
+        println!("\n [FINAL WARNING] Airdrop failed on all RPCs. You may need to retry later.");
     }
 
     Ok(pubkey)
 }
-

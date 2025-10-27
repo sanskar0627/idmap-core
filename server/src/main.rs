@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     println!("finished DKG for server");
 
     // airdrop some sol after generating keys for testing
-    let pubkey = keygen::airdrop_funds(&solana_address, 50_000_000)?;
+    let pubkey = keygen::airdrop_funds(&solana_address, 5_000_000)?;
     std::thread::sleep(std::time::Duration::from_secs(60));
 
     // ================= SIGNING PHASE =================

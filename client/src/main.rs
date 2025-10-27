@@ -15,7 +15,6 @@ pub struct MessageToSign {
 async fn main() -> Result<()> {
     let id: u64 = 1;
     let socket = TcpStream::connect("127.0.0.1:7000").await?;
-    println!("[CLIENT] Connected to server");
 
     let std_stream = socket.into_std()?;
     std_stream.set_nonblocking(true)?;
