@@ -33,9 +33,14 @@ type SigningMsg = Msg<Ed25519>;
 pub async fn run_signing_phase(
     id: u64,
     valid_shares: Valid<DirtyKeyShare<Ed25519>>,
-    std_stream_sign: std::net::TcpStream,
+    socket: tokio::net::TcpStream,
     message_data: Vec<u8>
 ) -> Result<(Vec<u8>, Vec<u8>)> {
+    
+    let std_stream: std::net::TcpStream = socket.into_std()?;
+    std_stream.set_nonblocking(true)?;
+    let std_stream_sign: std::net::TcpStream = std_stream.try_clone()?;
+    
     // Convert standard TCP stream into tokio streams for async communication
     let reader_stream_sign = TcpStream::from_std(std_stream_sign.try_clone()?)?;
     let writer_stream_sign = TcpStream::from_std(std_stream_sign)?;

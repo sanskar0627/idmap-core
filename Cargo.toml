@@ -28,6 +28,9 @@ solana-rpc-client = "3.0.8"
 solana-instruction = "3.0.0"
 solana-message = "3.0.1"
 solana-program = "3.0.0"
+dotenvy = "0.15.7"
+
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "macros"] }
 
 
 

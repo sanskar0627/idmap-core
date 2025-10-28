@@ -21,10 +21,15 @@ type KeygenMsg = ThresholdMsg<Ed25519, SecurityLevel128, Sha256>;
 
 /// Runs the DKG protocol for this participant and returns the generated private share.
 pub async fn generate_private_share(
-    std_stream_dkg: std::net::TcpStream,
+    socket: tokio::net::TcpStream,
     id: u64,
-    session: &'static [u8],
+    session: &[u8],
 ) -> Result<Valid<DirtyKeyShare<Ed25519>>> {
+    
+    let std_stream: std::net::TcpStream = socket.into_std()?;
+    std_stream.set_nonblocking(true)?;
+    let std_stream_dkg: std::net::TcpStream = std_stream.try_clone()?;
+
     // Convert std streams to tokio streams
     let reader_stream_dkg = TcpStream::from_std(std_stream_dkg.try_clone()?)?;
     let writer_stream_dkg = TcpStream::from_std(std_stream_dkg)?;
@@ -51,7 +56,7 @@ pub async fn generate_private_share(
         hex::encode(shared_public_key.to_bytes(true))
     );
 
-    let private_share = &valid_share.x;
+    let private_share: &NonZero<SecretScalar<Ed25519>> = &valid_share.x;
     let encoded: EncodedScalar<Ed25519> = <NonZero<SecretScalar<Ed25519>> as AdditionalEntropy<
         givre::ciphersuite::Ed25519,
     >>::to_bytes(private_share);

@@ -15,6 +15,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 pub mod keygen;
 pub mod sign;
+pub mod config;
 
 #[derive(Serialize, Deserialize, Debug)]
 enum MsgKind {
