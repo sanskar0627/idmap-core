@@ -2,11 +2,12 @@ use anyhow::Result;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::{net::TcpListener, task};
 use tokio::sync::RwLock;
+use tokio::time::{Duration, timeout};
+use tokio::{net::TcpListener, task};
 use tracing::{debug, error, info, warn};
 
-use dkg_tcp::{keygen, sign, env_loader::init_env};
+use dkg_tcp::{env_loader::init_env, keygen, sign};
 use givre::generic_ec::curves::Ed25519;
 use givre::key_share::DirtyKeyShare;
 use givre::keygen::key_share::Valid;
@@ -20,7 +21,7 @@ type ShareStore = Arc<RwLock<HashMap<(u64, String), Valid<DirtyKeyShare<Ed25519>
 /// Structured environment configuration for the DKG + Signing servers.
 #[derive(Debug, Clone)]
 struct EnvConfig {
-    n : u16,
+    n: u16,
     node_id: u64,
     redis_url: String,
     dkg_addr: String,
@@ -36,20 +37,17 @@ impl EnvConfig {
                 .unwrap_or_else(|_| "2".into())
                 .parse::<u16>()
                 .expect("N must be numeric"),
-                
+
             node_id: env::var("NODE_ID")
                 .unwrap_or_else(|_| "0".into())
                 .parse::<u64>()
                 .expect("NODE_ID must be numeric"),
 
-            redis_url: env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
+            redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
 
-            dkg_addr: env::var("DKG_SERVER_ADDR")
-                .unwrap_or_else(|_| "0.0.0.0:7001".into()),
+            dkg_addr: env::var("DKG_SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:7001".into()),
 
-            sign_addr: env::var("SIGN_SERVER_ADDR")
-                .unwrap_or_else(|_| "0.0.0.0:7002".into()),
+            sign_addr: env::var("SIGN_SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:7002".into()),
 
             default_session: env::var("DEFAULT_SESSION_ID")
                 .unwrap_or_else(|_| "session-001".into()),
@@ -124,7 +122,8 @@ async fn run_dkg_server(
     pubsub.subscribe("dkg-start").await?;
     info!("[DKG] Listening on Redis channel `dkg-start`");
 
-    let mut pub_conn: MultiplexedConnection = redis_client.get_multiplexed_async_connection().await?;
+    let mut pub_conn: MultiplexedConnection =
+        redis_client.get_multiplexed_async_connection().await?;
     let listener = TcpListener::bind(addr).await?;
     info!("[DKG] TCP listener active on {}", addr);
 
@@ -141,10 +140,41 @@ async fn run_dkg_server(
         let session = parsed["session"].as_str().unwrap_or(default_session);
         info!("[DKG] Starting keygen session {}", session);
 
-        let (socket, peer) = listener.accept().await?;
+        // ✅ Timeout for TCP accept (prevents hanging if no peer connects)
+        let (socket, peer) = match timeout(Duration::from_secs(10), listener.accept()).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                error!("[DKG] TCP accept error: {:?}", e);
+                continue;
+            }
+            Err(_) => {
+                warn!(
+                    "[DKG] Timeout waiting for peer connection in session {}",
+                    session
+                );
+                continue;
+            }
+        };
         info!("[DKG] Connected to peer {:?}", peer);
 
-        let shares = keygen::generate_private_share(socket, id, n, session.as_bytes()).await?;
+        // ✅ Timeout for DKG computation (prevents indefinite wait)
+        let shares = match timeout(
+            Duration::from_secs(30),
+            keygen::generate_private_share(socket, id, n, session.as_bytes()),
+        )
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                error!("[DKG] Key generation failed: {:?}", e);
+                continue;
+            }
+            Err(_) => {
+                error!("[DKG] DKG phase timed out for session {}", session);
+                continue;
+            }
+        };
+
         let pubkey = bs58::encode(shares.shared_public_key().to_bytes(true)).into_string();
 
         {
@@ -161,8 +191,14 @@ async fn run_dkg_server(
             "server_id": id,
         });
 
-        pub_conn.publish::<_, _, ()>("dkg-result", response.to_string()).await?;
-        info!("[DKG] DKG result published!");
+        if let Err(e) = pub_conn
+            .publish::<_, _, ()>("dkg-result", response.to_string())
+            .await
+        {
+            error!("[DKG] Failed to publish DKG result: {:?}", e);
+        } else {
+            info!("[DKG] DKG result published successfully!");
+        }
     }
 
     Ok(())
@@ -180,7 +216,8 @@ async fn run_sign_server(
     pubsub.subscribe("sign-start").await?;
     info!("[SIGN] Listening on Redis channel `sign-start`");
 
-    let mut pub_conn: MultiplexedConnection = redis_client.get_multiplexed_async_connection().await?;
+    let mut pub_conn: MultiplexedConnection =
+        redis_client.get_multiplexed_async_connection().await?;
     let listener = TcpListener::bind(addr).await?;
     info!("[SIGN] TCP listener active on {}", addr);
 
@@ -210,10 +247,18 @@ async fn run_sign_server(
         let session = parsed["session"].as_str().unwrap_or(default_session);
         info!("[SIGN] Starting signing for session {}", session);
 
-        let (socket, peer) = match listener.accept().await {
-            Ok(s) => s,
-            Err(e) => {
+        // ✅ Timeout for client connection
+        let (socket, peer) = match timeout(Duration::from_secs(10), listener.accept()).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
                 error!("[SIGN] TCP accept error: {:?}", e);
+                continue;
+            }
+            Err(_) => {
+                warn!(
+                    "[SIGN] Timeout waiting for client to connect for session {}",
+                    session
+                );
                 continue;
             }
         };
@@ -234,7 +279,9 @@ async fn run_sign_server(
                     "error": format!("No share found for node {} session {}", id, session),
                     "server_id": id,
                 });
-                let _ = pub_conn.publish::<_, _, ()>("sign-result", error_ack.to_string()).await;
+                let _ = pub_conn
+                    .publish::<_, _, ()>("sign-result", error_ack.to_string())
+                    .await;
                 continue;
             }
         };
@@ -248,11 +295,17 @@ async fn run_sign_server(
             }
         };
 
-        match sign::run_signing_phase(id, valid_share, socket, message_bytes).await {
-            Ok((r, z)) => {
+        // ✅ Timeout for signing phase itself
+        match timeout(
+            Duration::from_secs(15),
+            sign::run_signing_phase(id, valid_share, socket, message_bytes),
+        )
+        .await
+        {
+            Ok(Ok((r, z))) => {
                 let sig = [r, z].concat();
-                let sol_sig = Signature::try_from(sig.clone())
-                    .expect("Invalid Solana signature conversion");
+                let sol_sig =
+                    Signature::try_from(sig.clone()).expect("Invalid Solana signature conversion");
 
                 let response = serde_json::json!({
                     "id": parsed["id"],
@@ -261,10 +314,12 @@ async fn run_sign_server(
                     "server_id": id,
                 });
 
-                pub_conn.publish::<_, _, ()>("sign-result", response.to_string()).await?;
-                info!("[SIGN] Signature published!");
+                pub_conn
+                    .publish::<_, _, ()>("sign-result", response.to_string())
+                    .await?;
+                info!("[SIGN] Signature published successfully!");
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!("[SIGN] Signing failed: {:?}", e);
                 let fail_ack = serde_json::json!({
                     "id": parsed["id"],
@@ -272,7 +327,21 @@ async fn run_sign_server(
                     "error": format!("Signing failed: {}", e),
                     "server_id": id,
                 });
-                let _ = pub_conn.publish::<_, _, ()>("sign-result", fail_ack.to_string()).await;
+                let _ = pub_conn
+                    .publish::<_, _, ()>("sign-result", fail_ack.to_string())
+                    .await;
+            }
+            Err(_) => {
+                error!("[SIGN] Signing phase timed out for session {}", session);
+                let timeout_ack = serde_json::json!({
+                    "id": parsed["id"],
+                    "result_type": "sign-error",
+                    "error": "Signing phase timed out",
+                    "server_id": id,
+                });
+                let _ = pub_conn
+                    .publish::<_, _, ()>("sign-result", timeout_ack.to_string())
+                    .await;
             }
         }
     }
