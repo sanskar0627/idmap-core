@@ -12,6 +12,10 @@ Cargo.lock
 .env
 *.env
 
+# Ignore all env files
+*.env
+**/*.env
+
 # === OS-specific ===
 .DS_Store
 Thumbs.db
