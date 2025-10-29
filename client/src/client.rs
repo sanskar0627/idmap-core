@@ -38,21 +38,20 @@ impl EnvConfig {
                 .unwrap_or_else(|_| "1".into())
                 .parse::<u16>()
                 .expect("N must be a number"),
-                
+
             node_id: env::var("NODE_ID")
                 .unwrap_or_else(|_| "1".into())
                 .parse::<u64>()
                 .expect("NODE_ID must be a number"),
-                
-            redis_url: env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
-                
+
+            redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
+
             dkg_server_addr: env::var("DKG_SERVER_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:7001".into()),
-                
+
             sign_server_addr: env::var("SIGN_SERVER_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:7002".into()),
-                
+
             default_session_id: env::var("DEFAULT_SESSION_ID")
                 .unwrap_or_else(|_| "session-001".into()),
         })
@@ -104,7 +103,7 @@ pub async fn run_client() -> Result<()> {
     Ok(())
 }
 
-/// 🔹 Handles DKG phase client logic.
+///  Handles DKG phase client logic.
 async fn run_dkg_client(
     redis_client: Arc<Client>,
     share_store: ShareStore,
@@ -141,7 +140,7 @@ async fn run_dkg_client(
             info!("[DKG] Stored share in memory for session {}", session);
 
             let response = serde_json::json!({
-                "id": parsed["id"],
+                "id": parsed["id"], // node backend id
                 "result_type": "dkg-result",
                 "data": pubkey,
                 "server_id": id,
@@ -155,7 +154,7 @@ async fn run_dkg_client(
     Ok(())
 }
 
-/// 🔹 Handles SIGN phase client logic.
+///  Handles SIGN phase client logic.
 async fn run_sign_client(
     redis_client: Arc<Client>,
     share_store: ShareStore,
@@ -194,6 +193,8 @@ async fn run_sign_client(
             continue;
         }
 
+        let s = parsed["session"].as_str().unwrap();
+        info!("[CLIENT-SIGN] original {}", s);
         let session = parsed["session"].as_str().unwrap_or("session-001");
         info!("[CLIENT-SIGN] Signing for session {}", session);
 
