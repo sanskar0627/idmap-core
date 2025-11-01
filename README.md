@@ -10,6 +10,19 @@ Implements a 2-of-2 threshold signature scheme where two parties can jointly:
 
 Neither party can sign alone — both must participate to produce a valid signature.
 
+---
+
+## 🌐 Resources & Links
+
+Here are all the key resources related to **IdMap** and its components:
+
+- 🔗 **IdMap Gateway Repository:** [github.com/akash-R-A-J/idmap-core](https://github.com/akash-R-A-J/idmap-gateway)
+- 📘 **IdMap Gateway – Detailed Documentation:** [deepwiki.com/akash-R-A-J/idmap-gateway](https://deepwiki.com/akash-R-A-J/idmap-gateway)
+- 📗 **IdMap Core – Detailed Documentation:** [deepwiki.com/akash-R-A-J/idmap-core](https://deepwiki.com/akash-R-A-J/idmap-core)
+- 🚀 **Live Website:** [id-map.shop](https://www.id-map.shop/)
+
+---
+
 ## Project Structure
 
 ```
@@ -196,7 +209,7 @@ cargo clippy
 6. Each party produces signature components (r, z)
 7. Signature is valid and can be used in Solana transactions
 
-## Core Library (`dkg_tcp`)
+## Core Library (`idmap-core`)
 
 The `src/` directory contains reusable components:
 
@@ -227,13 +240,6 @@ The `src/` directory contains reusable components:
 - **solana-sdk** — Blockchain transaction creation
 - **serde/bincode** — Message serialization
 
-## Current Limitations
-
-- Hardcoded to 2-of-2 threshold (t=2, n=2)
-- Session coordination relies on external Redis triggers
-- No built-in key persistence (shares stored in memory)
-- TCP connections are not authenticated or encrypted
-- Limited error recovery and retry logic
 
 ## Extending the System
 
@@ -268,6 +274,26 @@ The `src/` directory contains reusable components:
 - Confirm `.env` files exist in `server/` and `client/` directories
 - Check file permissions
 
-## License
+---
 
-Id<Map>
+## Future Roadmap / Upcoming Features
+
+- **Client-side WASM & IndexedDB**: Execute part of the DKG in-browser and store encrypted key shares client-side to enhance transparency and trust.  
+- **Rust-SGX Enclave**: Securely persist server-side key shares within Intel SGX enclaves for stronger protection and decentralization.  
+- **Mobile App Integration**: Enable biometric WebAuthn and local encrypted key storage for a seamless mobile identity experience.  
+- **Security & TLS Layer**: Implement TLS, encryption, and request signing across all inter-service communications.  
+- **Key Recovery Protocol**: Develop a decentralized recovery mechanism using threshold cryptography and multi-party consent.
+
+---
+
+### 📄 License
+
+This project is part of an open-source initiative for passwordless Web3 authentication.
+
+### 🤝 Contributing
+
+Contributions are welcome! Feel free to open issues or submit pull requests.
+
+---
+
+**Built with ❤️ for secure, passwordless Solana transactions**
