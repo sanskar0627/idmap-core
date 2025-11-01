@@ -1,29 +1,96 @@
 # idmap-core
 
-A distributed key generation (DKG) and threshold signing system for Solana transactions using Ed25519 cryptography.
-
-## What This Does
-
-Implements a 2-of-2 threshold signature scheme where two parties can jointly:
-1. Generate a shared Ed25519 keypair without either party knowing the full private key
-2. Collaboratively sign Solana transactions using their key shares
-
-Neither party can sign alone — both must participate to produce a valid signature.
+A robust, production-ready distributed key generation (DKG) and threshold signing framework for Solana transactions using Ed25519 cryptography.
 
 ---
 
-## 🌐 Resources & Links
+## 🚀 Overview
 
-Here are all the key resources related to **IdMap** and its components:
+**idmap-core** enables two parties to:
 
-- 🔗 **IdMap Gateway Repository:** [github.com/akash-R-A-J/idmap-core](https://github.com/akash-R-A-J/idmap-gateway)
-- 📘 **IdMap Gateway – Detailed Documentation:** [deepwiki.com/akash-R-A-J/idmap-gateway](https://deepwiki.com/akash-R-A-J/idmap-gateway)
-- 📗 **IdMap Core – Detailed Documentation:** [deepwiki.com/akash-R-A-J/idmap-core](https://deepwiki.com/akash-R-A-J/idmap-core)
-- 🚀 **Live Website:** [id-map.shop](https://www.id-map.shop/)
+- **Jointly generate a shared Ed25519 keypair** without exposing the full private key to either participant.
+- **Collaboratively sign Solana transactions** using a 2-of-2 threshold signature scheme, ensuring that neither party can unilaterally sign.
+
+This architecture ensures secure, non-custodial management of Solana keys, ideal for high-trust applications such as wallets, blockchain identity, and decentralized finance.
 
 ---
 
-## Project Structure
+## 📚 Table of Contents
+
+- [Features](#features)
+- [Related Resources](#related-resources)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Quickstart](#quickstart)
+- [Configuration](#configuration)
+- [Library API Highlights](#library-api-highlights)
+- [Extensibility](#extensibility)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## ✨ Features
+
+- **2-of-2 Threshold DKG:** Secure, distributed keypair generation (Ed25519, CGGMP21 protocol).
+- **Collaborative Signing:** Both parties must participate to produce a valid Solana signature.
+- **Redis Pub/Sub Orchestration:** Session-based protocol triggering and coordination.
+- **TCP-based MPC Transport:** Reliable, length-delimited message framing over async sockets.
+- **Modular Workspace:** Clean separation between library, client, and server components.
+- **Production-Grade Primitives:** Built on top of industry-standard cryptography and async Rust.
+- **Extensible:** Designed for future threshold configurations, key storage, and secure enclaves.
+
+---
+
+## 🌐 Related Resources
+
+- **Gateway Repository:** [idmap-gateway](https://github.com/akash-R-A-J/idmap-gateway)
+- **Core Documentation:** [deepwiki.com/akash-R-A-J/idmap-core](https://deepwiki.com/akash-R-A-J/idmap-core)
+- **Gateway Documentation:** [deepwiki.com/akash-R-A-J/idmap-gateway](https://deepwiki.com/akash-R-A-J/idmap-gateway)
+- **Live Demo:** [id-map.shop](https://www.id-map.shop/)
+
+---
+
+## 🏛 Architecture
+
+### High-Level Workflow
+
+```
+┌────────────────────────────────────────────┐
+│                Redis Pub/Sub               │
+│  (Triggers keygen/signing sessions)        │
+└─────────┬──────────────────────┬───────────┘
+          │                      │
+          ▼                      ▼
+    ┌─────────────┐       ┌─────────────┐
+    │   Server    │◄─────►│   Client    │
+    │ NODE_ID=0   │  TCP  │ NODE_ID=1   │
+    └─────────────┘       └─────────────┘
+          │                      │
+          └──────────┬───────────┘
+                     ▼
+         MPC Protocol Execution
+```
+
+**Flow:**
+
+1. Both server and client listen to Redis channels for protocol triggers.
+2. External systems publish to `keygen:start:<session_id>` or `signing:start:<session_id>`.
+3. Server accepts TCP connections from the client for each session.
+4. Parties execute the round-based MPC protocol for DKG or signing.
+5. Results are persisted locally and can be reported back via Redis.
+
+**Communication:**
+
+- **Redis:** Session coordination and external orchestration.
+- **TCP:** Secure MPC message exchange.
+- **Solana RPC:** Transaction creation and submission.
+
+---
+
+## 📁 Project Structure
 
 ```
 idmap-core/
@@ -31,61 +98,28 @@ idmap-core/
 │   ├── keygen.rs     # DKG protocol implementation
 │   ├── sign.rs       # Threshold signing logic
 │   ├── transport.rs  # TCP message transport layer
-│   └── env_loader.rs # Environment configuration
+│   └── env_loader.rs # Environment configuration loader
 ├── server/           # Server binary
 │   └── src/
-│       └── server.rs # Accepts connections, coordinates protocols
+│       └── server.rs # Handles protocol orchestration
 ├── client/           # Client binary
 │   └── src/
-│       └── client.rs # Connects to server, participates in protocols
+│       └── client.rs # Initiates keygen/signing as a participant
 ```
 
-**Workspace Layout:**
-- **`src/`** — Reusable library containing core DKG/signing primitives and TCP transport
-- **`server/`** — TCP server that accepts connections and coordinates protocol execution
-- **`client/`** — Client that connects to the server to participate in key generation and signing
+- **src/** — Reusable library with DKG/signing primitives and TCP transport.
+- **server/** — Orchestrates sessions, listens for connections.
+- **client/** — Connects as a participant to run keygen/signing.
 
-## Architecture
+---
 
-### How It Works
+## ⚡ Quickstart
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    Redis Pub/Sub                    │
-│         (triggers keygen/signing sessions)          │
-└──────────────┬──────────────────────┬───────────────┘
-               │                      │
-               ▼                      ▼
-       ┌──────────────┐      ┌──────────────┐
-       │   Server     │◄────►│   Client     │
-       │  (NODE_ID=0) │ TCP  │  (NODE_ID=1) │
-       └──────────────┘      └──────────────┘
-               │                      │
-               └──────────┬───────────┘
-                          ▼
-                  MPC Protocol Execution
-                  (keygen or signing)
-```
+### Prerequisites
 
-**Flow:**
-1. Both server and client listen to Redis pub/sub channels
-2. External trigger publishes to `keygen:start:<session_id>` or `signing:start:<session_id>`
-3. Server accepts TCP connection from client
-4. Parties execute threshold protocol over TCP using the `round-based` MPC framework
-5. Results are stored locally and published back to Redis
-
-**Communication:**
-- **Redis:** Coordination and triggering (pub/sub)
-- **TCP:** Party-to-party MPC protocol messages
-- **Solana RPC:** Fetching blockhash, submitting transactions
-
-## Prerequisites
-
-- Rust 1.70+ (edition 2024)
-- Redis server running locally or remotely
-- Access to Solana devnet RPC (for testing)
-
-## Installation
+- [Rust](https://rustup.rs/) 1.70+ (edition 2024)
+- [Redis server](https://redis.io/) running locally or remotely
+- Solana devnet RPC endpoint (for end-to-end testing)
 
 ### 1. Install Rust
 
@@ -96,16 +130,16 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ### 2. Clone and Build
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/akash-R-A-J/idmap-core.git
 cd idmap-core
 cargo build --release
 ```
 
-## Configuration
+### 3. Configure `.env` Files
 
-Each binary requires its own `.env` file for configuration.
+Each binary requires its own environment file.
 
-### Server Configuration (`server/.env`)
+#### Server (`server/.env`):
 
 ```env
 NODE_ID=0
@@ -116,7 +150,7 @@ SIGN_SERVER_ADDR=0.0.0.0:7002
 DEFAULT_SESSION_ID=session-001
 ```
 
-### Client Configuration (`client/.env`)
+#### Client (`client/.env`):
 
 ```env
 NODE_ID=1
@@ -127,173 +161,113 @@ SIGN_SERVER_ADDR=127.0.0.1:7002
 DEFAULT_SESSION_ID=session-001
 ```
 
-**Variables:**
-- `NODE_ID` — Unique party identifier (0 for server, 1 for client)
-- `N` — Total number of participants (currently 2)
-- `REDIS_URL` — Redis connection string
-- `DKG_SERVER_ADDR` — TCP address for DKG phase
-- `SIGN_SERVER_ADDR` — TCP address for signing phase
-- `DEFAULT_SESSION_ID` — Session identifier for coordinating rounds
-
-## Running Locally
-
-### 1. Start Redis
+### 4. Run Redis
 
 ```bash
 redis-server
 ```
 
-### 2. Run Server (Terminal 1)
+### 5. Start the Server
 
 ```bash
 cargo run -p server
 ```
 
-### 3. Run Client (Terminal 2)
+### 6. Start the Client
 
 ```bash
 cargo run -p client
 ```
 
-### 4. Trigger Protocols via Redis
+### 7. Trigger Protocols with Redis CLI
 
 ```bash
-# Trigger key generation
+# Initiate key generation
 redis-cli PUBLISH "keygen:start:session-001" ""
 
-# Trigger signing (after keygen completes)
+# Initiate signing (after keygen completes)
 redis-cli PUBLISH "signing:start:session-001" ""
 ```
 
-## Development Commands
+---
 
-```bash
-# Build all crates
-cargo build
+## ⚙️ Configuration Reference
 
-# Build specific binary
-cargo build -p server
-cargo build -p client
+**Environment variables:**
 
-# Run tests
-cargo test
-
-# Check without building
-cargo check
-
-# Format code
-cargo fmt
-
-# Lint
-cargo clippy
-```
-
-## How Protocols Work
-
-### Key Generation (DKG)
-
-1. External system publishes to `keygen:start:<session_id>`
-2. Server listens on `DKG_SERVER_ADDR` for incoming connection
-3. Client connects to server's DKG endpoint
-4. Both parties run the CGGMP21 keygen protocol over TCP
-5. Each party stores their key share locally in `ShareStore`
-6. Public key can be derived from either share
-
-### Threshold Signing
-
-1. External system publishes to `signing:start:<session_id>` with message data
-2. Server listens on `SIGN_SERVER_ADDR` for incoming connection
-3. Client connects to server's signing endpoint
-4. Both parties load their key shares for the session
-5. Run threshold signing protocol on the message
-6. Each party produces signature components (r, z)
-7. Signature is valid and can be used in Solana transactions
-
-## Core Library (`idmap-core`)
-
-The `src/` directory contains reusable components:
-
-**`keygen.rs`**
-- `generate_private_share()` — Runs DKG protocol, returns key share
-- `airdrop_funds()` — Helper for getting devnet SOL
-
-**`sign.rs`**
-- `run_signing_phase()` — Executes threshold signing, returns signature
-- `create_transfer_message()` — Builds Solana transfer transactions
-- `send_message_to_other_server()` — Coordinates message exchange
-
-**`transport.rs`**
-- `TcpIncoming<M>` — Deserializes incoming MPC messages from TCP
-- `TcpOutgoing<M>` — Serializes outgoing MPC messages to TCP
-- Length-delimited framing using `tokio_util::codec`
-
-**`env_loader.rs`**
-- Loads `.env` files from multiple locations (local, root)
-- Thread-safe initialization
-
-## Key Dependencies
-
-- **givre** — Threshold cryptography (CGGMP21 protocol, Ed25519)
-- **round-based** — MPC framework for multi-party computation
-- **tokio** — Async runtime
-- **redis** — Pub/sub coordination between parties
-- **solana-sdk** — Blockchain transaction creation
-- **serde/bincode** — Message serialization
-
-
-## Extending the System
-
-**To support different thresholds:**
-- Modify `keygen.rs:42` to parameterize `.set_threshold(2)`
-- Update `sign.rs:56` to dynamically set `parties_indexes_at_keygen`
-
-**To add key persistence:**
-- Integrate the SQLx database layer (already imported in dependencies)
-- Serialize/deserialize `Valid<DirtyKeyShare<Ed25519>>` to database
-
-**To secure TCP connections:**
-- Add TLS wrapper around `TcpStream` in `transport.rs`
-- Implement mutual authentication between parties
-
-## Troubleshooting
-
-**Connection refused:**
-- Ensure server is running before client
-- Check that addresses in `.env` match between server/client
-
-**Redis errors:**
-- Verify Redis is running: `redis-cli ping`
-- Check `REDIS_URL` is correct in both `.env` files
-
-**DKG/Signing failures:**
-- Ensure both parties use the same `DEFAULT_SESSION_ID`
-- Check that `NODE_ID` is unique (0 and 1)
-- Verify network connectivity between server and client
-
-**Environment not loading:**
-- Confirm `.env` files exist in `server/` and `client/` directories
-- Check file permissions
+| Variable           | Description                                         |
+|--------------------|-----------------------------------------------------|
+| `NODE_ID`          | Unique party identifier (0 = server, 1 = client)    |
+| `N`                | Total number of participants (currently 2)          |
+| `REDIS_URL`        | Redis connection URL                                |
+| `DKG_SERVER_ADDR`  | TCP address for DKG protocol                        |
+| `SIGN_SERVER_ADDR` | TCP address for signing protocol                    |
+| `DEFAULT_SESSION_ID` | Default session identifier                        |
 
 ---
 
-## Future Roadmap / Upcoming Features
+## 📖 Library API Highlights
 
-- **Client-side WASM & IndexedDB**: Execute part of the DKG in-browser and store encrypted key shares client-side to enhance transparency and trust.  
-- **Rust-SGX Enclave**: Securely persist server-side key shares within Intel SGX enclaves for stronger protection and decentralization.  
-- **Mobile App Integration**: Enable biometric WebAuthn and local encrypted key storage for a seamless mobile identity experience.  
-- **Security & TLS Layer**: Implement TLS, encryption, and request signing across all inter-service communications.  
-- **Key Recovery Protocol**: Develop a decentralized recovery mechanism using threshold cryptography and multi-party consent.
-
----
-
-### 📄 License
-
-This project is part of an open-source initiative for passwordless Web3 authentication.
-
-### 🤝 Contributing
-
-Contributions are welcome! Feel free to open issues or submit pull requests.
+- `keygen.rs`
+    - `generate_private_share()` — Executes DKG, returns key share.
+    - `airdrop_funds()` — Helper for devnet SOL.
+- `sign.rs`
+    - `run_signing_phase()` — Performs threshold signing.
+    - `create_transfer_message()` — Builds Solana transfer transactions.
+- `transport.rs`
+    - `TcpIncoming<T>`/`TcpOutgoing<T>` — Async, length-delimited TCP framing with `tokio_util::codec`.
+- `env_loader.rs`
+    - Loads and merges `.env` configurations from multiple paths.
 
 ---
 
-**Built with ❤️ for secure, passwordless Solana transactions**
+## ⚒️ Extensibility & Customization
+
+- **Threshold adjustment:**  
+  Parameterize threshold and participant count in `keygen.rs` and `sign.rs` for N-of-M signatures.
+
+- **Key persistence:**  
+  Integrate SQLx (already included in dependencies) to persist and restore key shares securely.
+
+- **Enhanced security:**  
+  Add TLS to all TCP streams in `transport.rs` for encrypted, mutually authenticated communication.
+
+- **Platform support:**  
+  Planned WASM/IndexedDB for browser-based DKG, SGX enclaves for secure server-side key storage, and mobile device integration.
+
+---
+
+## 🩺 Troubleshooting
+
+| Problem                    | Solution                                                                 |
+|----------------------------|-------------------------------------------------------------------------|
+| Connection refused         | Ensure the server is running before the client. Verify TCP addresses.   |
+| Redis errors               | Confirm Redis is running and accessible. Check `REDIS_URL` values.      |
+| Protocol failures          | Use matching `DEFAULT_SESSION_ID` and unique `NODE_ID` values.          |
+| Env file not loaded        | Ensure `.env` files exist and are readable in both `server/` and `client/` folders. |
+
+---
+
+## 🗺️ Roadmap
+
+- **WASM/IndexedDB client:** In-browser DKG and secure key storage.
+- **SGX enclave support:** Hardware-backed key protection on server.
+- **Mobile integration:** Biometric authentication and local key vault.
+- **TLS/Mutual Auth:** Full-stack encrypted transport.
+- **Key recovery:** Decentralized, multi-party recovery protocols.
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Please open [issues](https://github.com/akash-R-A-J/idmap-core/issues) or submit [pull requests](https://github.com/akash-R-A-J/idmap-core/pulls).
+
+---
+
+## 📄 License
+
+This project is open-source and part of an initiative for secure, passwordless Web3 authentication.
+
+---
+
+**Built with ❤️ for secure, decentralized Solana transactions.**
